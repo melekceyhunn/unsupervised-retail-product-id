@@ -1,0 +1,7 @@
+torch==2.1.2
+torchvision==0.16.2
+opencv-python
+numpy<2
+cupy-cuda12x
+numba
+ultralytics
