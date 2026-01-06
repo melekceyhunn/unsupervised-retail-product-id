@@ -28,7 +28,7 @@ Sistem, ürünleri tespit etmek için **YOLOv11**, ürünlerin kimliğini belirl
 ├── main.py                 # Ana uygulama kodu (Tespit, Tanıma, Takip)
 ├── urun_kutuphanesi/       # Referans ürün görsellerinin bulunduğu klasör (.jpg, .png)
 ├── otput_video             # Elde edilen çıktı videosu  
-├── best.pt                 # Eğitilmiş YOLOv11 ağırlık dosyası
+├── best.pt                 # SKU110K datset ile eğitilmiş YOLOv11 ağırlık dosyası
 ├── planogram.mp4           # İşlenecek giriş videosu
 ├── Dockerfile              # Docker imajı oluşturma dosyası
 ├── requirements.txt        # Gerekli Python kütüphaneleri
