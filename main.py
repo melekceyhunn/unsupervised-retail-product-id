@@ -1,8 +1,8 @@
 import cv2
 import numpy as np
 import torch
-import cupy as cp # GEREKSİNİM: GPU Matris İşlemleri
-from numba import njit # GEREKSİNİM: İşlemci Hızlandırma
+import cupy as cp # GPU Matris İşlemleri
+from numba import njit #İşlemci Hızlandırma
 import os
 from ultralytics import YOLO
 import sys
@@ -29,7 +29,7 @@ class OptimizedMatcher:
         self.referance_names = []
         self.is_ready = False
     def load_reference_folder(self, folder_path):
-       # referance_folder içindeki resimleri okur ve GPU matrisine dönüştürür.
+       # urun_kutuphanesi içindeki resimleri okur ve GPU matrisine dönüştürür.
         valid_exts = [".png", ".jpg", ".jpeg"] # desteklenen resim formatları jpg, jpeg, png, bmp
         temp_emb_list = []
         self.referance_names = []  
@@ -52,12 +52,12 @@ class OptimizedMatcher:
             with torch.no_grad():
                 if self.device=="cuda":
                     inputs = {k: v.half() for k, v in inputs.items()}
-                    outputs=self.model(**inputs) # özellik çıkarımı
+                    outputs=self.model(**inputs) # Özellik çıkarımı
                 else:
                     outputs=self.model(**inputs)
             feat=outputs.last_hidden_state[:,0,:]
             feat=feat / feat.norm(dim=-1,keepdim=True) # L2 Normalizasyonu
-            temp_emb_list.append(feat.cpu().numpy()) # cupy için float32 yapıldı
+            temp_emb_list.append(feat.cpu().numpy()) # Cupy için float32 yapıldı
             self.referance_names.append(name)
             print(f"yüklendi:{f}")
         if temp_emb_list:
@@ -150,15 +150,19 @@ class ProductMemory:
         boxa_area=(boxa[2]-boxa[0]) * (boxa[3]-boxa[1])
         boxb_area=(boxb[2]-boxb[0]) * (boxb[3]-boxb[1])
         return inter_area / float(boxa_area + boxb_area - inter_area + 1e-6)
+
 # --- BÖLÜM 3: ANA İŞLEM ---
 def main():
-    video_path="Proje_videosu.mp4"  # GİRİŞ VİDEOSU
+    video_path="planogram.mp4"  # GİRİŞ VİDEOSU
     reference_folder="urun_kutuphanesi"  # REFERANS GÖRÜNTÜ KLASÖRÜ
-    output_Video_path="output_video.mp4"  # ÇIKIŞ VİDEOSU
     yolo_model_path="best.pt"  # YOLOv11  MODELİ
-    detection_threshold=0.68  # TESPİT EŞİĞİ
+    detection_threshold=0.65  # TESPİT EŞİĞİ
     frame_skip=1  # HER frame_skip KAREDE BİR İŞLEM YAPILIR
-    show_window=True  # EKRANDA GÖSTER
+    show_window = False if os.environ.get("NO_DISPLAY") else True 
+    
+    # hangi ortamda çalışacak (local/docker)
+    is_running_in_docker = os.environ.get("DOCKER_ENV") == "true"
+    
     # DINOv2 Matcher başlatma
     matcher=OptimizedMatcher(model_name="facebook/dinov2-small")
     matcher.load_reference_folder(reference_folder)
@@ -171,48 +175,80 @@ def main():
     if not os.path.exists(video_path):
         print("Video dosyası bulunamadı:", {video_path})
         return
+    
     cap=cv2.VideoCapture(video_path)
-    width=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps=cap.get(cv2.CAP_PROP_FPS)
-    # Video yazıcı ayarları
-    out=cv2.VideoWriter(
+    raw_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    raw_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+
+    if is_running_in_docker:
+        print("Docker ortamı!! Tespit işlemi için video 90 derece döndürülecek.")
+        # Docker'da döndüreceğimiz için genişlik ve yükseklik yer değiştirir
+        new_width = raw_height
+        new_height = raw_width
+        output_Video_path = "output_video_docker.avi"
+        out=cv2.VideoWriter(
+        output_Video_path,
+        cv2.VideoWriter_fourcc(*'MJPG'),
+        fps,
+        (new_width, new_height)
+    ) 
+    else:
+        print("Local ortam algılandı: Orijinal boyutlar korunuyor.")
+        # Localde her şey normal
+        new_width = raw_width
+        new_height = raw_height
+        output_Video_path = "output_video_local.mp4"
+        out=cv2.VideoWriter(
         output_Video_path,
         cv2.VideoWriter_fourcc(*'mp4v'),
         fps,
-        (width, height)
-    )  
+        (new_width, new_height)
+    )     
     print("işlem başladı çıkmak için 'q' ya basın.")
+    
     last_drawan_objects=[]
     frame_idx=0
+    
     while True:
         ret,frame =cap.read()
         if not ret:
             break
+        if is_running_in_docker:
+            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+        current_h, current_w = frame.shape[:2]
+
         frame_idx+=1
         if frame_idx % frame_skip ==0:
             use_halh=True if matcher.device=="cuda" else False
-            # daha iyi görünmesi için conf değeri 0.15 çektim, küçük nesneler için
+            # daha iyi görünmesi için conf değeri 0.15 yapıldı, küçük nesneler için
             results=detector(frame,conf=0.15,verbose=False,half=use_halh)
-            boxes=results[0].boxes.xyxy.cpu().numpy()
+            
+            if len(results) > 0:
+                boxes = results[0].boxes.xyxy.cpu().numpy()
+            else:
+                boxes = []
+            
             cropes=[]
             raw_detections=[]
+            
             for box in boxes:
                 x1,y1,x2,y2=map(int,box)
                 x1,y1=max(0,x1),max(0,y1)
-                x2,y2=min(width,x2),min(height,y2)
+                x2,y2=min(current_w,x2),min(current_h,y2)
+                
                 if (x2-x1) * (y2-y1) <10:
                     continue
                 crop=frame[y1:y2,x1:x2]
                 crop=cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
                 cropes.append(crop)
                 raw_detections.append((x1,y1,x2,y2))
+                
             current_valid_detections=[]
             if cropes:
                 labels,scores=matcher.find_best_matches(cropes)
                 for i,(label,score) in enumerate(zip(labels,scores)):
-                    # Daha hassas olması için eşik değeri 0.60
-                    if score>=0.60:
+                    if score>=detection_threshold:
                         current_valid_detections.append((raw_detections[i], label, score))
             last_drawan_objects=tracker.update(current_valid_detections)
         
@@ -221,10 +257,8 @@ def main():
                 continue
             x1,y1,x2,y2=item['box']
             label=item['label']
-            
-            thick=1
             color=(0,255,0) # Yeşil bbox
-            cv2.rectangle(frame,(x1,y1),(x2,y2),color,thickness=thick)
+            cv2.rectangle(frame,(x1,y1),(x2,y2),color,thickness=1)
             
             text=f"{label}"
             font_scale=0.4
@@ -238,13 +272,15 @@ def main():
         
 # --- BÖLÜM 4: CANLI GÖSTERİM ---   
         if show_window:         
-            display_frame=cv2.resize(frame,(1280,720)) if width>1920 else frame
+            display_frame=cv2.resize(frame,(0, 0), fx=0.4, fy=0.4)
             cv2.imshow("Ürün Tanıma",display_frame)
             if cv2.waitKey(1) & 0xFF==ord('q'):
                 break
     cap.release()
     out.release()   
-    cv2.destroyAllWindows()
+    if show_window:
+        cv2.destroyAllWindows()
     print("işlem tamamlandı. Video kaydedildi:", {output_Video_path})
+    
 if __name__=="__main__":
     main()
