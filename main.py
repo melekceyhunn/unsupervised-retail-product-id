@@ -100,55 +100,79 @@ class OptimizedMatcher:
         
 # --- BÖLÜM 2: HAFIZA (TRACKER) ---
 class ProductMemory:
-    def __init__(self, persistence=5,iou_threshold=0.5):
-        self.memory=[]
-        self.persistence=persistence
-        self.iou_threshold=iou_threshold
+    def __init__(self, persistence=5, iou_threshold=0.5):
+        self.memory = []
+        self.persistence = persistence
+        self.iou_threshold = iou_threshold
+
     def update(self, current_detections):
         for item in self.memory:
-            item['life']-=1
+            item['life'] -= 1
+
+        # Eğer yeni tespit yoksa, ömrü bitmeyenleri döndür
         if not current_detections:
-            self.memory=[item for item in self.memory if item['life']>0]
+            self.memory = [item for item in self.memory if item['life'] > 0]
             return self.memory
-        new_memory=[]
-        matched_indices=set()
+
+        new_memory = []
+        matched_indices = set()
         for detect_box, detect_label, det_score in current_detections:
-            matched=False
+            matched = False
             for i, memory_item in enumerate(self.memory):
                 if i in matched_indices:
                     continue
-                iou=self.compute_iuo(detect_box, memory_item['box'])
-                if iou>=self.iou_threshold:
+                iou = self.compute_iuo(detect_box, memory_item['box'])
+
+                if iou >= self.iou_threshold:
+                    current_best_score = memory_item.get('score', 0)
+                    
+                    if current_best_score > det_score:
+                        # Eskiyi Koru
+                        final_label = memory_item['label']
+                        final_score = current_best_score
+                    else:
+                        # Yeniyi Al
+                        final_label = detect_label
+                        final_score = det_score
+
                     new_memory.append({
                         'box': detect_box,
-                        'label': detect_label,
+                        'label': final_label,
+                        'score': final_score,
                         'life': self.persistence
                     })
+                    
                     matched_indices.add(i)
                     matched = True
                     break
+            
+            # Eşleşme yoksa yeni kayıt
             if not matched:
                 new_memory.append({
                     'box': detect_box,
                     'label': detect_label,
+                    'score': det_score, # İlk skor
                     'life': self.persistence
                 })
         for i, memory_item in enumerate(self.memory):
-            if i not in matched_indices and memory_item['life']>0:
+            if i not in matched_indices and memory_item['life'] > 0:
                 new_memory.append(memory_item)
-        self.memory=new_memory
+
+        self.memory = new_memory
         return self.memory
-    # Kesişim oranı hesaplaması
     @staticmethod
     @njit
     def compute_iuo(boxa, boxb):
-        xa=max(boxa[0], boxb[0])
-        ya=max(boxa[1], boxb[1])
-        xb=min(boxa[2], boxb[2])
-        yb=min(boxa[3], boxb[3])
-        inter_area=max(0, xb - xa) * max(0, yb - ya)
-        boxa_area=(boxa[2]-boxa[0]) * (boxa[3]-boxa[1])
-        boxb_area=(boxb[2]-boxb[0]) * (boxb[3]-boxb[1])
+        xa = max(boxa[0], boxb[0])
+        ya = max(boxa[1], boxb[1])
+        xb = min(boxa[2], boxb[2])
+        yb = min(boxa[3], boxb[3])
+        
+        inter_area = max(0, xb - xa) * max(0, yb - ya)
+        
+        boxa_area = (boxa[2] - boxa[0]) * (boxa[3] - boxa[1])
+        boxb_area = (boxb[2] - boxb[0]) * (boxb[3] - boxb[1])
+        
         return inter_area / float(boxa_area + boxb_area - inter_area + 1e-6)
 
 # --- BÖLÜM 3: ANA İŞLEM ---
@@ -261,8 +285,8 @@ def main():
             cv2.rectangle(frame,(x1,y1),(x2,y2),color,thickness=1)
             
             text=f"{label}"
-            font_scale=0.4
-            font_thick=1
+            font_scale=0.5
+            font_thick=2
             font=cv2.FONT_HERSHEY_SIMPLEX
             (tw,th),_=cv2.getTextSize(text,font,font_scale,font_thick)
             cv2.rectangle(frame,(x1,y1-th-4),(x1+tw,y1),color,-1)
